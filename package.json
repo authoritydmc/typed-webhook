@@ -1,0 +1,20 @@
+{
+  "name": "typed-webhook",
+  "version": "0.1.0",
+  "description": "Strongly-typed multi-provider webhook signature verifier and payload handler",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [
+    "webhook",
+    "stripe",
+    "github",
+    "shopify",
+    "clerk",
+    "signature",
+    "security"
+  ],
+  "author": "authoritydmc",
+  "license": "MIT"
+}
