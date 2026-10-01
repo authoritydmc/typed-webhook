@@ -37,3 +37,110 @@ test('verifyShopifyWebhook validates Base64 HMAC signature', () => {
   assert.strictEqual(verifyShopifyWebhook({ payload, signatureHeader, secret }), true);
   assert.strictEqual(verifyShopifyWebhook({ payload, signatureHeader: 'invalid_base64==', secret }), false);
 });
+
+test('createExpressMiddleware attaches verified webhook on authentic signature', async () => {
+  const { createExpressMiddleware } = require('../src/index');
+  const secret = 'express-stripe-secret';
+  const payloadObj = { event: 'invoice.paid' };
+  const rawBody = JSON.stringify(payloadObj);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const sig = crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
+
+  const middleware = createExpressMiddleware({
+    provider: 'stripe',
+    secret,
+  });
+
+  const req = {
+    headers: {
+      'stripe-signature': `t=${timestamp},v1=${sig}`,
+    },
+    rawBody,
+  };
+  const res = {
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(data) {
+      this.data = data;
+    },
+  };
+
+  let nextCalled = false;
+  await middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.strictEqual(nextCalled, true);
+  assert.strictEqual(req.webhook.verified, true);
+  assert.deepStrictEqual(req.webhook.payload, payloadObj);
+});
+
+test('createNextRouteHandler processes valid Web standard Request', async () => {
+  const { createNextRouteHandler } = require('../src/index');
+  const secret = 'nextjs-github-secret';
+  const payload = JSON.stringify({ action: 'created' });
+  const sig = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
+
+  const routeHandler = createNextRouteHandler({
+    provider: 'github',
+    secret,
+    handler: async ({ payload, provider }) => {
+      return new Response(JSON.stringify({ ok: true, action: payload.action, provider }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  const request = new Request('https://example.com/api/webhooks/github', {
+    method: 'POST',
+    headers: {
+      'x-hub-signature-256': sig,
+      'Content-Type': 'application/json',
+    },
+    body: payload,
+  });
+
+  const response = await routeHandler(request);
+  assert.strictEqual(response.status, 200);
+  const resJson = await response.json();
+  assert.strictEqual(resJson.ok, true);
+  assert.strictEqual(resJson.action, 'created');
+  assert.strictEqual(resJson.provider, 'github');
+});
+
+test('createHonoMiddleware verifies and populates context', async () => {
+  const { createHonoMiddleware } = require('../src/index');
+  const secret = 'hono-shopify-secret';
+  const payload = JSON.stringify({ product: 'shoe', price: 50 });
+  const sig = crypto.createHmac('sha256', secret).update(payload, 'utf8').digest('base64');
+
+  const middleware = createHonoMiddleware({
+    provider: 'shopify',
+    secret,
+  });
+
+  const contextData = {};
+  const mockContext = {
+    req: {
+      text: async () => payload,
+      header: (name) => (name === 'x-shopify-hmac-sha256' ? sig : null),
+    },
+    set: (key, val) => {
+      contextData[key] = val;
+    },
+    json: (data, status) => ({ data, status }),
+  };
+
+  let nextCalled = false;
+  await middleware(mockContext, async () => {
+    nextCalled = true;
+  });
+
+  assert.strictEqual(nextCalled, true);
+  assert.strictEqual(contextData.webhook.verified, true);
+  assert.strictEqual(contextData.webhook.payload.product, 'shoe');
+});
+
